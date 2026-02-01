@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1e1e2e"/>
+      <stop offset="100%" stop-color="#2d2d44"/>
+    </linearGradient>
+    <linearGradient id="diamond" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+    <linearGradient id="flow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="128" height="128" rx="24" fill="url(#bg)"/>
+
+  <!-- Ethereum Diamond (simplified) -->
+  <g transform="translate(64, 52)">
+    <!-- Top half -->
+    <polygon points="0,-32 -20,0 0,-8 20,0" fill="url(#diamond)" opacity="0.9"/>
+    <polygon points="0,-32 20,0 0,-8" fill="#a78bfa" opacity="0.7"/>
+    <!-- Bottom half -->
+    <polygon points="0,20 -20,0 0,-8 20,0" fill="url(#diamond)"/>
+    <polygon points="0,20 20,0 0,-8" fill="#7c3aed" opacity="0.8"/>
+  </g>
+
+  <!-- Flow lines branching out -->
+  <g stroke="url(#flow)" stroke-width="3" stroke-linecap="round" fill="none">
+    <!-- Left branch -->
+    <path d="M44 72 Q32 82 24 96"/>
+    <circle cx="24" cy="96" r="4" fill="#22d3ee"/>
+
+    <!-- Center branch -->
+    <path d="M64 72 L64 96"/>
+    <circle cx="64" cy="96" r="4" fill="#22d3ee"/>
+
+    <!-- Right branch -->
+    <path d="M84 72 Q96 82 104 96"/>
+    <circle cx="104" cy="96" r="4" fill="#22d3ee"/>
+
+    <!-- Sub-branches -->
+    <path d="M24 96 L16 110" opacity="0.6"/>
+    <circle cx="16" cy="110" r="3" fill="#22d3ee" opacity="0.6"/>
+    <path d="M24 96 L32 110" opacity="0.6"/>
+    <circle cx="32" cy="110" r="3" fill="#22d3ee" opacity="0.6"/>
+
+    <path d="M104 96 L96 110" opacity="0.6"/>
+    <circle cx="96" cy="110" r="3" fill="#22d3ee" opacity="0.6"/>
+    <path d="M104 96 L112 110" opacity="0.6"/>
+    <circle cx="112" cy="110" r="3" fill="#22d3ee" opacity="0.6"/>
+  </g>
+</svg>

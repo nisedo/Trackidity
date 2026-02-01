@@ -1,0 +1,170 @@
+{
+  "name": "trackidity",
+  "displayName": "Trackidity",
+  "description": "Entry points explorer for Solidity projects using Slither",
+  "version": "0.0.26",
+  "publisher": "nisedo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nisedo/Trackidity.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nisedo/Trackidity/issues"
+  },
+  "homepage": "https://github.com/nisedo/Trackidity#readme",
+  "icon": "media/trackidity.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onView:trackidity.workflows",
+    "onView:trackidity.variables"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "trackidity",
+          "title": "Trackidity",
+          "icon": "media/trackidity-activitybar.svg"
+        }
+      ]
+    },
+    "views": {
+      "trackidity": [
+        {
+          "id": "trackidity.workflows",
+          "name": "Entry Points"
+        },
+        {
+          "id": "trackidity.variables",
+          "name": "Variables"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "trackidity.reanalyzeWorkflows",
+        "title": "Re-analyze (Slither)",
+        "category": "Trackidity",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "trackidity.openFunction",
+        "title": "Open Function",
+        "category": "Trackidity"
+      },
+      {
+        "command": "trackidity.hideFile",
+        "title": "Hide File",
+        "category": "Trackidity"
+      },
+      {
+        "command": "trackidity.hideEntrypoint",
+        "title": "Hide",
+        "category": "Trackidity"
+      },
+      {
+        "command": "trackidity.unhideAll",
+        "title": "Unhide All",
+        "category": "Trackidity",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "trackidity.markReviewed",
+        "title": "Mark as Reviewed",
+        "category": "Trackidity"
+      },
+      {
+        "command": "trackidity.unmarkReviewed",
+        "title": "Unmark as Reviewed",
+        "category": "Trackidity"
+      },
+      {
+        "command": "trackidity.clearAllReviewed",
+        "title": "Clear All Reviewed",
+        "category": "Trackidity",
+        "icon": "$(clear-all)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "trackidity.unhideAll",
+          "when": "view == trackidity.workflows",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "trackidity.hideFile",
+          "when": "view == trackidity.workflows && viewItem == trackidity.file",
+          "group": "trackidity"
+        },
+        {
+          "command": "trackidity.hideEntrypoint",
+          "when": "view == trackidity.workflows && (viewItem == trackidity.entrypoint || viewItem == trackidity.entrypoint.reviewed)",
+          "group": "trackidity"
+        },
+        {
+          "command": "trackidity.markReviewed",
+          "when": "view == trackidity.workflows && viewItem == trackidity.entrypoint",
+          "group": "trackidity"
+        },
+        {
+          "command": "trackidity.unmarkReviewed",
+          "when": "view == trackidity.workflows && viewItem == trackidity.entrypoint.reviewed",
+          "group": "trackidity"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Trackidity",
+      "properties": {
+        "trackidity.targetPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional analysis target within the workspace (e.g. a Foundry/Hardhat project folder or a Solidity file). If empty, Trackidity auto-detects a supported project in the workspace."
+        },
+        "trackidity.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python interpreter used to run Slither. If empty, Trackidity auto-detects (prefers the `slither` CLI's python, then falls back to python3/python)."
+        },
+        "trackidity.slitherRepoPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to a Slither checkout (folder containing the slither/ python package). If empty, Trackidity imports Slither from the configured python environment."
+        },
+        "trackidity.solcPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional solc binary path passed to Slither."
+        },
+        "trackidity.solcArgs": {
+          "type": "string",
+          "default": "",
+          "description": "Optional solc args passed to Slither (e.g. --via-ir)."
+        },
+        "trackidity.filterPaths": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional filter paths passed to Slither."
+        },
+        "trackidity.excludeDependencies": {
+          "type": "boolean",
+          "default": true,
+          "description": "Hide functions defined in dependencies from the entry points list."
+        }
+      }
+    }
+  }
+}
