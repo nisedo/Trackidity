@@ -20,6 +20,12 @@ A VSCode extension for exploring Solidity smart contract entry points using [Sli
   - Inherited: blue
   - Shadowed (warning): red solid
 
+## Installation
+
+```bash
+git clone https://github.com/nisedo/Trackidity.git && cd Trackidity && npm install && npx @vscode/vsce package && code --install-extension trackidity-*.vsix
+```
+
 ## Requirements
 
 - [Slither](https://github.com/crytic/slither) installed and accessible from Python
