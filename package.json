@@ -2,7 +2,7 @@
   "name": "trackidity",
   "displayName": "Trackidity",
   "description": "Entry points explorer for Solidity projects using Slither",
-  "version": "0.0.26",
+  "version": "0.0.27",
   "publisher": "nisedo",
   "license": "MIT",
   "repository": {
@@ -21,6 +21,7 @@
     "Other"
   ],
   "dependencies": {
+    "ignore": "^5.2.4",
     "solidity-workspace": "^0.3.1"
   },
   "main": "./extension.js",
@@ -93,6 +94,26 @@
         "title": "Clear All Reviewed",
         "category": "Trackidity",
         "icon": "$(clear-all)"
+      },
+      {
+        "command": "trackidity.markUnmarkSelectedFile",
+        "title": "Toggle In Scope",
+        "category": "Trackidity"
+      },
+      {
+        "command": "trackidity.markUnmarkActiveFile",
+        "title": "Toggle Active File In Scope",
+        "category": "Trackidity"
+      },
+      {
+        "command": "trackidity.reloadFromScopeFile",
+        "title": "Reload Scope from scope.txt/scope.md",
+        "category": "Trackidity"
+      },
+      {
+        "command": "trackidity.clearAllMarked",
+        "title": "Clear All Marked Files",
+        "category": "Trackidity"
       }
     ],
     "menus": {
@@ -123,6 +144,18 @@
           "command": "trackidity.unmarkReviewed",
           "when": "view == trackidity.workflows && viewItem == trackidity.entrypoint.reviewed",
           "group": "trackidity"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "trackidity.markUnmarkSelectedFile",
+          "group": "trackidity@1"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "trackidity.markUnmarkActiveFile",
+          "group": "trackidity@1"
         }
       ]
     },
@@ -171,6 +204,11 @@
           "type": "boolean",
           "default": true,
           "description": "Enable state variable syntax highlighting (highlights constant, immutable, inherited state variables)."
+        },
+        "trackidity.autoLoadScope": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically load marked files from scope.txt or scope.md on workspace open."
         }
       }
     }

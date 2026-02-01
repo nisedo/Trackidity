@@ -20,6 +20,12 @@ A VSCode extension for exploring Solidity smart contract entry points using [Sli
   - Inherited: blue
   - Shadowed (warning): red solid
 
+- **File Marking**: Mark files as "in scope" for auditing with 📌 badges in the explorer
+  - Right-click files/folders in explorer to toggle marks
+  - Bulk directory marking (recursively marks all files inside)
+  - Load scope from `scope.txt` or `scope.md` files
+  - Marks persist in workspace storage
+
 ## Installation
 
 ```bash
@@ -50,6 +56,8 @@ uv tool install slither-analyzer
 - **Trackidity: Re-analyze (Slither)** - Re-run analysis after code changes
 - **Trackidity: Unhide All** - Restore hidden files and entry points
 - **Trackidity: Clear All Reviewed** - Reset review progress
+- **Trackidity: Reload Scope from scope.txt/scope.md** - Reload marked files from scope files
+- **Trackidity: Clear All Marked Files** - Clear all file marks
 
 ### Context Menu Actions
 
@@ -58,6 +66,14 @@ Right-click on items in the Entry Points view:
 - **Hide File** - Hide all entry points from a file
 - **Hide** - Hide a specific entry point
 - **Mark as Reviewed** / **Unmark as Reviewed** - Track review progress
+
+Right-click on files/folders in the Explorer:
+
+- **Toggle In Scope** - Mark/unmark files as in scope (shows 📌 badge)
+
+Right-click on editor tabs:
+
+- **Toggle Active File In Scope** - Mark/unmark the current file
 
 ## Configuration
 
@@ -71,6 +87,7 @@ Right-click on items in the Entry Points view:
 | `trackidity.filterPaths`         | Paths to filter from analysis.                                | `[]`    |
 | `trackidity.excludeDependencies` | Hide functions from lib/node_modules/test folders.            | `true`  |
 | `trackidity.stateVarHighlighting.enabled` | Enable state variable syntax highlighting.         | `true`  |
+| `trackidity.autoLoadScope`       | Auto-load scope.txt/scope.md on workspace open.               | `true`  |
 
 ## How It Works
 

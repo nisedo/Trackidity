@@ -13,6 +13,7 @@ Trackidity is a VSCode extension that analyzes Solidity smart contracts using Sl
 - `VariablesProvider`: Tree data provider for state variables view
 - `SolidityParser`: Uses `solidity-workspace` to parse Solidity files and extract state variable usages
 - `StateVarDecorationManager`: Applies syntax highlighting decorations to state variables
+- `FileMarkingProvider`: File decoration provider for marking files as "in scope" with 📌 badges
 - Python resolution logic: Detects Slither installation via multiple strategies (slither CLI shebang, VSCode Python extension, venv, uvx, pipx)
 
 **Analysis Backend**: `python/extract_workflows.py`
@@ -49,6 +50,8 @@ uvx ty check python/
 - `trackidity.pythonPath`: Explicit Python interpreter for Slither
 - `trackidity.slitherRepoPath`: Path to Slither source checkout
 - `trackidity.excludeDependencies`: Hide functions from lib/dependencies folders
+- `trackidity.stateVarHighlighting.enabled`: Enable/disable state variable syntax highlighting
+- `trackidity.autoLoadScope`: Auto-load marked files from scope.txt/scope.md on workspace open
 
 ## Extension Views
 

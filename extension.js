@@ -3,12 +3,14 @@ const fs = require("fs");
 const vscode = require("vscode");
 const cp = require("child_process");
 const solidityWorkspace = require("solidity-workspace");
+const ignore = require("ignore");
 
 const WORKFLOWS_VIEW_ID = "trackidity.workflows";
 const VARIABLES_VIEW_ID = "trackidity.variables";
 const HIDDEN_FILES_KEY = "trackidity.hiddenFiles";
 const HIDDEN_ENTRYPOINTS_KEY = "trackidity.hiddenEntrypoints";
 const REVIEWED_ENTRYPOINTS_KEY = "trackidity.reviewedEntrypoints";
+const MARKED_FILES_KEY = "trackidity.markedFiles";
 
 let jumpHighlightDecoration;
 let jumpHighlightTimeout;
@@ -658,6 +660,349 @@ class StateVarDecorationManager {
   }
 }
 
+// ============================================================================
+// FileMarkingProvider - Manages file marking with 📌 badge in explorer
+// ============================================================================
+
+class FileMarkingProvider {
+  constructor(context) {
+    this._context = context;
+    this._onDidChangeFileDecorations = new vscode.EventEmitter();
+    this.onDidChangeFileDecorations = this._onDidChangeFileDecorations.event;
+    this._disposables = [];
+
+    // Map of workspace root -> Set of marked file paths (relative to workspace)
+    this._markedFilesPerWorkspace = new Map();
+  }
+
+  init() {
+    // Load marked files from workspace storage
+    this._loadMarkedFiles();
+
+    // Register file decoration provider
+    const decorationDisposable = vscode.window.registerFileDecorationProvider(this);
+    this._disposables.push(decorationDisposable);
+    this._context.subscriptions.push(decorationDisposable);
+
+    // Listen for file renames to update marks
+    const renameDisposable = vscode.workspace.onDidRenameFiles((e) => {
+      this._handleFileRenames(e.files);
+    });
+    this._disposables.push(renameDisposable);
+    this._context.subscriptions.push(renameDisposable);
+
+    // Auto-load scope files if enabled
+    const config = vscode.workspace.getConfiguration("trackidity");
+    if (config.get("autoLoadScope", true)) {
+      this._loadScopeFiles();
+    }
+  }
+
+  // FileDecorationProvider implementation
+  provideFileDecoration(uri) {
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
+    if (!workspaceFolder) {
+      return null;
+    }
+
+    const workspaceRoot = workspaceFolder.uri.fsPath;
+    const relativePath = path.relative(workspaceRoot, uri.fsPath);
+    const markedFiles = this._markedFilesPerWorkspace.get(workspaceRoot);
+
+    if (markedFiles && markedFiles.has(relativePath)) {
+      return {
+        badge: "📌",
+        tooltip: "In Scope",
+      };
+    }
+
+    return null;
+  }
+
+  // Toggle mark state for a file or folder
+  async toggleMark(uri) {
+    if (!uri) {
+      return;
+    }
+
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
+    if (!workspaceFolder) {
+      vscode.window.showWarningMessage("File is not part of a workspace");
+      return;
+    }
+
+    const workspaceRoot = workspaceFolder.uri.fsPath;
+    const relativePath = path.relative(workspaceRoot, uri.fsPath);
+
+    if (!this._markedFilesPerWorkspace.has(workspaceRoot)) {
+      this._markedFilesPerWorkspace.set(workspaceRoot, new Set());
+    }
+
+    const markedFiles = this._markedFilesPerWorkspace.get(workspaceRoot);
+
+    // Check if it's a directory
+    try {
+      const stat = await vscode.workspace.fs.stat(uri);
+      if (stat.type === vscode.FileType.Directory) {
+        // For directories, recursively toggle all files inside
+        await this._toggleDirectoryMark(uri, workspaceRoot, markedFiles);
+      } else {
+        // For single files, toggle the mark
+        if (markedFiles.has(relativePath)) {
+          markedFiles.delete(relativePath);
+        } else {
+          markedFiles.add(relativePath);
+        }
+      }
+    } catch (e) {
+      // Assume it's a file if stat fails
+      if (markedFiles.has(relativePath)) {
+        markedFiles.delete(relativePath);
+      } else {
+        markedFiles.add(relativePath);
+      }
+    }
+
+    this._saveMarkedFiles();
+    this._onDidChangeFileDecorations.fire(undefined);
+  }
+
+  async _toggleDirectoryMark(dirUri, workspaceRoot, markedFiles) {
+    // Find all files in the directory
+    const files = await this._getAllFilesInDirectory(dirUri);
+
+    // Check if any file in the directory is already marked
+    const relativePaths = files.map((f) => path.relative(workspaceRoot, f.fsPath));
+    const anyMarked = relativePaths.some((p) => markedFiles.has(p));
+
+    if (anyMarked) {
+      // Unmark all files in the directory
+      for (const relPath of relativePaths) {
+        markedFiles.delete(relPath);
+      }
+    } else {
+      // Mark all files in the directory
+      for (const relPath of relativePaths) {
+        markedFiles.add(relPath);
+      }
+    }
+  }
+
+  async _getAllFilesInDirectory(dirUri) {
+    const results = [];
+
+    try {
+      const entries = await vscode.workspace.fs.readDirectory(dirUri);
+
+      for (const [name, type] of entries) {
+        const childUri = vscode.Uri.joinPath(dirUri, name);
+
+        if (type === vscode.FileType.Directory) {
+          // Skip node_modules, .git, and other common excluded directories
+          if (name === "node_modules" || name === ".git" || name === ".vscode") {
+            continue;
+          }
+          // Recursively get files from subdirectories
+          const subFiles = await this._getAllFilesInDirectory(childUri);
+          results.push(...subFiles);
+        } else if (type === vscode.FileType.File) {
+          results.push(childUri);
+        }
+      }
+    } catch (e) {
+      console.warn("Error reading directory:", e);
+    }
+
+    return results;
+  }
+
+  // Toggle mark for the active editor's file
+  toggleActiveFileMark() {
+    const editor = vscode.window.activeTextEditor;
+    if (editor) {
+      this.toggleMark(editor.document.uri);
+    } else {
+      vscode.window.showWarningMessage("No active file to mark");
+    }
+  }
+
+  // Clear all marked files
+  clearAllMarked() {
+    this._markedFilesPerWorkspace.clear();
+    this._saveMarkedFiles();
+    this._onDidChangeFileDecorations.fire(undefined);
+    vscode.window.showInformationMessage("Cleared all marked files");
+  }
+
+  // Load marked files from scope.txt or scope.md
+  async reloadFromScopeFile() {
+    await this._loadScopeFiles();
+    this._onDidChangeFileDecorations.fire(undefined);
+    vscode.window.showInformationMessage("Reloaded scope from scope files");
+  }
+
+  async _loadScopeFiles() {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders) {
+      return;
+    }
+
+    for (const folder of workspaceFolders) {
+      const workspaceRoot = folder.uri.fsPath;
+
+      // Try to find scope.txt or scope.md
+      const scopeFiles = ["scope.txt", "scope.md"];
+
+      for (const scopeFile of scopeFiles) {
+        const scopePath = path.join(workspaceRoot, scopeFile);
+
+        try {
+          if (fs.existsSync(scopePath)) {
+            const content = fs.readFileSync(scopePath, "utf8");
+            const patterns = this._parseScopeFile(content);
+
+            if (patterns.length > 0) {
+              await this._markFilesFromPatterns(workspaceRoot, patterns);
+              break; // Only use the first scope file found
+            }
+          }
+        } catch (e) {
+          console.warn(`Error reading scope file ${scopePath}:`, e);
+        }
+      }
+    }
+  }
+
+  _parseScopeFile(content) {
+    const patterns = [];
+    const lines = content.split(/\r?\n/);
+
+    for (const line of lines) {
+      // Trim whitespace
+      let trimmed = line.trim();
+
+      // Skip empty lines and comments
+      if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("//")) {
+        continue;
+      }
+
+      // Handle markdown list items (- file.sol or * file.sol)
+      if (trimmed.startsWith("-") || trimmed.startsWith("*")) {
+        trimmed = trimmed.slice(1).trim();
+      }
+
+      // Handle markdown code blocks (```file.sol```)
+      if (trimmed.startsWith("```")) {
+        trimmed = trimmed.slice(3);
+      }
+      if (trimmed.endsWith("```")) {
+        trimmed = trimmed.slice(0, -3);
+      }
+
+      // Handle markdown links ([file.sol](path))
+      const linkMatch = trimmed.match(/\[([^\]]+)\]\(([^)]+)\)/);
+      if (linkMatch) {
+        trimmed = linkMatch[2]; // Use the link path
+      }
+
+      // Skip if empty after processing
+      if (!trimmed) {
+        continue;
+      }
+
+      patterns.push(trimmed);
+    }
+
+    return patterns;
+  }
+
+  async _markFilesFromPatterns(workspaceRoot, patterns) {
+    if (!this._markedFilesPerWorkspace.has(workspaceRoot)) {
+      this._markedFilesPerWorkspace.set(workspaceRoot, new Set());
+    }
+
+    const markedFiles = this._markedFilesPerWorkspace.get(workspaceRoot);
+    const ig = ignore().add(patterns);
+
+    // Find all files in workspace and test against patterns
+    const baseUri = vscode.Uri.file(workspaceRoot);
+    const allFiles = await vscode.workspace.findFiles(
+      new vscode.RelativePattern(baseUri, "**/*"),
+      "**/node_modules/**"
+    );
+
+    for (const fileUri of allFiles) {
+      const relativePath = path.relative(workspaceRoot, fileUri.fsPath);
+
+      // Check if the file matches any pattern
+      if (ig.ignores(relativePath)) {
+        markedFiles.add(relativePath);
+      }
+    }
+
+    this._saveMarkedFiles();
+  }
+
+  _handleFileRenames(files) {
+    for (const { oldUri, newUri } of files) {
+      const oldWorkspace = vscode.workspace.getWorkspaceFolder(oldUri);
+      const newWorkspace = vscode.workspace.getWorkspaceFolder(newUri);
+
+      if (oldWorkspace && newWorkspace) {
+        const oldRoot = oldWorkspace.uri.fsPath;
+        const newRoot = newWorkspace.uri.fsPath;
+        const oldRelPath = path.relative(oldRoot, oldUri.fsPath);
+        const newRelPath = path.relative(newRoot, newUri.fsPath);
+
+        const oldMarkedFiles = this._markedFilesPerWorkspace.get(oldRoot);
+        if (oldMarkedFiles && oldMarkedFiles.has(oldRelPath)) {
+          oldMarkedFiles.delete(oldRelPath);
+
+          if (!this._markedFilesPerWorkspace.has(newRoot)) {
+            this._markedFilesPerWorkspace.set(newRoot, new Set());
+          }
+          this._markedFilesPerWorkspace.get(newRoot).add(newRelPath);
+        }
+      }
+    }
+
+    this._saveMarkedFiles();
+    this._onDidChangeFileDecorations.fire(undefined);
+  }
+
+  _loadMarkedFiles() {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders) {
+      return;
+    }
+
+    // Load from workspace state (multi-workspace support)
+    const storedData = this._context.workspaceState.get(MARKED_FILES_KEY, {});
+
+    for (const folder of workspaceFolders) {
+      const workspaceRoot = folder.uri.fsPath;
+      const markedArray = storedData[workspaceRoot] || [];
+      this._markedFilesPerWorkspace.set(workspaceRoot, new Set(markedArray));
+    }
+  }
+
+  _saveMarkedFiles() {
+    const dataToStore = {};
+
+    for (const [workspaceRoot, markedSet] of this._markedFilesPerWorkspace) {
+      dataToStore[workspaceRoot] = Array.from(markedSet);
+    }
+
+    this._context.workspaceState.update(MARKED_FILES_KEY, dataToStore);
+  }
+
+  dispose() {
+    for (const disposable of this._disposables) {
+      disposable.dispose();
+    }
+  }
+}
+
 function activate(context) {
   jumpHighlightDecoration = vscode.window.createTextEditorDecorationType({
     isWholeLine: true,
@@ -717,6 +1062,36 @@ function activate(context) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("trackidity.clearAllReviewed", () => workflowsProvider.clearAllReviewed())
+  );
+
+  // Initialize file marking provider
+  const fileMarkingProvider = new FileMarkingProvider(context);
+  fileMarkingProvider.init();
+  context.subscriptions.push({ dispose: () => fileMarkingProvider.dispose() });
+
+  // Register file marking commands
+  context.subscriptions.push(
+    vscode.commands.registerCommand("trackidity.markUnmarkSelectedFile", (uri) =>
+      fileMarkingProvider.toggleMark(uri)
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("trackidity.markUnmarkActiveFile", () =>
+      fileMarkingProvider.toggleActiveFileMark()
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("trackidity.reloadFromScopeFile", () =>
+      fileMarkingProvider.reloadFromScopeFile()
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("trackidity.clearAllMarked", () =>
+      fileMarkingProvider.clearAllMarked()
+    )
   );
 
   // Initialize state variable highlighting
