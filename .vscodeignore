@@ -1,0 +1,10 @@
+.git/**
+.gitignore
+.vscode/**
+.claude/**
+.ruff_cache/**
+__pycache__/**
+*.vsix
+*.pyc
+.DS_Store
+CLAUDE.md

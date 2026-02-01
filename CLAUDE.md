@@ -11,6 +11,8 @@ Trackidity is a VSCode extension that analyzes Solidity smart contracts using Sl
 **Extension Entry Point**: `extension.js` (Node.js/CommonJS)
 - `WorkflowsProvider`: Tree data provider for entry points view, handles hide/unhide, mark reviewed
 - `VariablesProvider`: Tree data provider for state variables view
+- `SolidityParser`: Uses `solidity-workspace` to parse Solidity files and extract state variable usages
+- `StateVarDecorationManager`: Applies syntax highlighting decorations to state variables
 - Python resolution logic: Detects Slither installation via multiple strategies (slither CLI shebang, VSCode Python extension, venv, uvx, pipx)
 
 **Analysis Backend**: `python/extract_workflows.py`

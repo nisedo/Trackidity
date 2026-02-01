@@ -13,6 +13,13 @@ A VSCode extension for exploring Solidity smart contract entry points using [Sli
   - Traces writes through internal call chains
   - Displays variable types and inheritance info
 
+- **State Variable Syntax Highlighting**: Colored underlines for state variables in the editor
+  - Regular state vars: golden
+  - Constants: green
+  - Immutables: purple
+  - Inherited: blue
+  - Shadowed (warning): red solid
+
 ## Requirements
 
 - [Slither](https://github.com/crytic/slither) installed and accessible from Python
@@ -57,6 +64,7 @@ Right-click on items in the Entry Points view:
 | `trackidity.solcArgs`            | Solc arguments (e.g., `--via-ir`).                            | `""`    |
 | `trackidity.filterPaths`         | Paths to filter from analysis.                                | `[]`    |
 | `trackidity.excludeDependencies` | Hide functions from lib/node_modules/test folders.            | `true`  |
+| `trackidity.stateVarHighlighting.enabled` | Enable state variable syntax highlighting.         | `true`  |
 
 ## How It Works
 

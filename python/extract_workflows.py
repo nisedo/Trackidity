@@ -595,6 +595,8 @@ def _extract_variables(
                     "contract": contract_name,
                     "inherited": is_inherited,
                     "inheritedFrom": inherited_from,
+                    "isConstant": bool(getattr(state_var, "is_constant", False)),
+                    "isImmutable": bool(getattr(state_var, "is_immutable", False)),
                     "location": var_loc.__dict__ if var_loc else None,
                     "modifiers": modifiers,
                 }

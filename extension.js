@@ -2,6 +2,7 @@ const path = require("path");
 const fs = require("fs");
 const vscode = require("vscode");
 const cp = require("child_process");
+const solidityWorkspace = require("solidity-workspace");
 
 const WORKFLOWS_VIEW_ID = "trackidity.workflows";
 const VARIABLES_VIEW_ID = "trackidity.variables";
@@ -12,6 +13,650 @@ const REVIEWED_ENTRYPOINTS_KEY = "trackidity.reviewedEntrypoints";
 let jumpHighlightDecoration;
 let jumpHighlightTimeout;
 let jumpHighlightSeq = 0;
+
+// ============================================================================
+// SolidityParser - Parses Solidity files to extract state variables and usages
+// ============================================================================
+
+class SolidityParser {
+  constructor() {
+    const workspaceFolders = vscode.workspace.workspaceFolders?.map((wf) => wf.uri.fsPath) ?? [];
+    this._workspace = new solidityWorkspace.Workspace(workspaceFolders);
+    this._cancellationTokenSource = null;
+  }
+
+  cancelParsing() {
+    if (this._cancellationTokenSource) {
+      this._cancellationTokenSource.cancel();
+      this._cancellationTokenSource.dispose();
+      this._cancellationTokenSource = null;
+    }
+  }
+
+  async parse(document) {
+    this.cancelParsing();
+    this._cancellationTokenSource = new vscode.CancellationTokenSource();
+
+    try {
+      await this._workspace.add(document.fileName, {
+        content: document.getText(),
+        cancellationToken: this._cancellationTokenSource.token,
+      });
+
+      const finished = await this._workspace.withParserReady(document.fileName, true);
+      const wantHash = solidityWorkspace.SourceUnit.getHash(document.getText());
+
+      if (
+        this._cancellationTokenSource.token.isCancellationRequested ||
+        !finished.some(
+          (fp) => fp.value && fp.value.filePath === document.fileName && fp.value.hash === wantHash
+        )
+      ) {
+        return null;
+      }
+
+      const sourceUnit = this._workspace.get(document.fileName);
+      if (!sourceUnit) {
+        return null;
+      }
+
+      return this._extractStateVariables(sourceUnit);
+    } catch (error) {
+      console.warn(`Error parsing Solidity file: ${document.fileName}`, error);
+      return null;
+    }
+  }
+
+  _extractStateVariables(sourceUnit) {
+    const contracts = [];
+
+    for (const contract of Object.values(sourceUnit.contracts)) {
+      const stateVariables = [];
+      const inheritedUsages = [];
+
+      // Build set of inherited names
+      const inheritedNames = new Set(
+        Object.keys(contract.inherited_names).filter(
+          (name) => contract.inherited_names[name] && contract.inherited_names[name] !== contract
+        )
+      );
+
+      // Process state variables declared in this contract
+      for (const svar of Object.values(contract.stateVars)) {
+        const typeName = this._getTypeName(svar.typeName);
+        const usages = [];
+
+        if (svar.extra && svar.extra.usedAt) {
+          for (const ident of svar.extra.usedAt) {
+            const isShadowed = !!(
+              ident.extra.inFunction &&
+              ident.extra.inFunction.declarations &&
+              ident.extra.inFunction.declarations[ident.name]
+            );
+
+            usages.push({
+              line: ident.loc.start.line,
+              startColumn: ident.loc.start.column,
+              endColumn: ident.loc.start.column + ident.name.length,
+              isShadowed,
+            });
+          }
+        }
+
+        stateVariables.push({
+          name: svar.name,
+          type: typeName,
+          contract: contract.name,
+          isConstant: svar.isDeclaredConst ?? false,
+          isImmutable: svar.isImmutable ?? false,
+          declarationLocation: {
+            line: svar.identifier.loc.start.line,
+            startColumn: svar.identifier.loc.start.column,
+            endColumn: svar.identifier.loc.start.column + svar.identifier.name.length,
+          },
+          usages,
+        });
+      }
+
+      // Process identifiers in functions to find inherited state var usages
+      this._extractInheritedUsages(contract, inheritedNames, inheritedUsages);
+
+      contracts.push({
+        name: contract.name,
+        stateVariables,
+        inheritedNames,
+        inheritedUsages,
+      });
+    }
+
+    return {
+      filePath: sourceUnit.filePath,
+      contracts,
+    };
+  }
+
+  _extractInheritedUsages(contract, inheritedNames, inheritedUsages) {
+    if (contract.functions) {
+      for (const func of Object.values(contract.functions)) {
+        if (func.identifiers) {
+          for (const ident of func.identifiers) {
+            this._checkInheritedIdentifier(ident, contract, inheritedNames, inheritedUsages);
+          }
+        }
+      }
+    }
+
+    if (contract.modifiers) {
+      for (const mod of Object.values(contract.modifiers)) {
+        if (mod.identifiers) {
+          for (const ident of mod.identifiers) {
+            this._checkInheritedIdentifier(ident, contract, inheritedNames, inheritedUsages);
+          }
+        }
+      }
+    }
+  }
+
+  _checkInheritedIdentifier(ident, contract, inheritedNames, inheritedUsages) {
+    if (!ident.name || !ident.loc) {
+      return;
+    }
+
+    const isInherited = inheritedNames.has(ident.name);
+    const isLocalStateVar = !!contract.stateVars[ident.name];
+
+    if (isInherited && !isLocalStateVar) {
+      const sourceContract = contract.inherited_names[ident.name];
+      const isShadowed = !!(
+        ident.extra?.inFunction?.declarations &&
+        ident.extra.inFunction.declarations[ident.name]
+      );
+
+      inheritedUsages.push({
+        name: ident.name,
+        sourceContract: sourceContract?.name ?? "unknown",
+        line: ident.loc.start.line,
+        startColumn: ident.loc.start.column,
+        endColumn: ident.loc.start.column + ident.name.length,
+        isShadowed,
+      });
+    }
+  }
+
+  _getTypeName(typeName) {
+    if (!typeName) {
+      return "unknown";
+    }
+
+    switch (typeName.type) {
+      case "ElementaryTypeName":
+        return typeName.name ?? "unknown";
+      case "UserDefinedTypeName":
+        return typeName.namePath ?? "unknown";
+      case "Mapping":
+        return `mapping(${this._getTypeName(typeName.keyType)} => ${this._getTypeName(typeName.valueType)})`;
+      case "ArrayTypeName":
+        return `${this._getTypeName(typeName.baseTypeName)}[]`;
+      default:
+        return typeName.name ?? typeName.namePath ?? "unknown";
+    }
+  }
+
+  dispose() {
+    this.cancelParsing();
+  }
+}
+
+// ============================================================================
+// StateVarDecorationManager - Manages syntax highlighting for state variables
+// ============================================================================
+
+class StateVarDecorationManager {
+  constructor(context) {
+    this._context = context;
+    this._styles = null;
+    this._parser = new SolidityParser();
+    this._debounceTimer = null;
+    this._debounceDelay = 300;
+    this._disposables = [];
+    this._inheritedVarsMap = new Map();
+  }
+
+  init() {
+    this._createDecorationStyles();
+    this._registerEventListeners();
+
+    // Decorate current editor if it's a Solidity file
+    if (
+      vscode.window.activeTextEditor &&
+      vscode.window.activeTextEditor.document.languageId === "solidity"
+    ) {
+      this.decorateEditor(vscode.window.activeTextEditor);
+    }
+  }
+
+  setAnalysisData(analysis) {
+    this._inheritedVarsMap.clear();
+
+    if (!analysis || !analysis.variables) {
+      return;
+    }
+
+    // Build map of inherited variables from Slither analysis
+    for (const varFile of analysis.variables) {
+      const filePath = varFile.path;
+      const contractName = varFile.contract;
+
+      if (!this._inheritedVarsMap.has(filePath)) {
+        this._inheritedVarsMap.set(filePath, new Map());
+      }
+
+      const contractMap = this._inheritedVarsMap.get(filePath);
+      if (!contractMap.has(contractName)) {
+        contractMap.set(contractName, []);
+      }
+
+      const inheritedVars = contractMap.get(contractName);
+
+      for (const v of varFile.vars) {
+        if (v.inherited && v.inheritedFrom) {
+          inheritedVars.push({
+            name: v.name,
+            type: v.type,
+            contract: v.contract,
+            inheritedFrom: v.inheritedFrom,
+            isConstant: v.isConstant ?? false,
+            isImmutable: v.isImmutable ?? false,
+          });
+        }
+      }
+    }
+
+    // Re-decorate active editor
+    if (
+      vscode.window.activeTextEditor &&
+      vscode.window.activeTextEditor.document.languageId === "solidity"
+    ) {
+      this.decorateEditor(vscode.window.activeTextEditor);
+    }
+  }
+
+  _createDecorationStyles() {
+    const createDecorationType = (options) => {
+      return vscode.window.createTextEditorDecorationType({
+        borderWidth: "1px",
+        borderStyle: options.borderStyle ?? "dotted",
+        light: {
+          borderColor: options.borderColor,
+        },
+        dark: {
+          borderColor: options.darkBorderColor ?? options.borderColor,
+        },
+      });
+    };
+
+    this._styles = {
+      // Regular state variables - golden
+      stateVar: createDecorationType({
+        borderColor: "DarkGoldenRod",
+        darkBorderColor: "GoldenRod",
+      }),
+      // Constant state variables - green
+      stateVarConstant: createDecorationType({
+        borderColor: "darkgreen",
+      }),
+      // Immutable state variables - purple
+      stateVarImmutable: createDecorationType({
+        borderColor: "DarkOrchid",
+        darkBorderColor: "MediumOrchid",
+      }),
+      // Inherited state variables - blue
+      stateVarInherited: createDecorationType({
+        borderColor: "darkblue",
+        darkBorderColor: "RoyalBlue",
+      }),
+      // Shadowed state variables - red solid border (warning)
+      stateVarShadowed: createDecorationType({
+        borderColor: "red",
+        borderStyle: "solid",
+      }),
+    };
+
+    // Register for disposal
+    for (const style of Object.values(this._styles)) {
+      this._context.subscriptions.push(style);
+    }
+  }
+
+  _registerEventListeners() {
+    // Listen for active editor changes
+    const editorChangeDisposable = vscode.window.onDidChangeActiveTextEditor((editor) => {
+      if (editor && editor.document.languageId === "solidity") {
+        this.decorateEditor(editor);
+      }
+    });
+
+    // Listen for document changes (debounced)
+    const documentChangeDisposable = vscode.workspace.onDidChangeTextDocument((event) => {
+      if (event.document.languageId !== "solidity") {
+        return;
+      }
+
+      const editor = vscode.window.visibleTextEditors.find(
+        (e) => e.document === event.document
+      );
+
+      if (editor) {
+        this._debounceDecorate(editor);
+      }
+    });
+
+    this._disposables.push(editorChangeDisposable, documentChangeDisposable);
+    this._context.subscriptions.push(editorChangeDisposable, documentChangeDisposable);
+  }
+
+  _debounceDecorate(editor) {
+    if (this._debounceTimer) {
+      clearTimeout(this._debounceTimer);
+    }
+
+    this._debounceTimer = setTimeout(() => {
+      this.decorateEditor(editor);
+    }, this._debounceDelay);
+  }
+
+  async decorateEditor(editor) {
+    if (!this._styles) {
+      return;
+    }
+
+    // Check if highlighting is enabled
+    const config = vscode.workspace.getConfiguration("trackidity");
+    const enabled = config.get("stateVarHighlighting.enabled", true);
+
+    if (!enabled) {
+      this.clearDecorations(editor);
+      return;
+    }
+
+    const document = editor.document;
+    if (document.languageId !== "solidity") {
+      return;
+    }
+
+    try {
+      const parsed = await this._parser.parse(document);
+      if (!parsed) {
+        return;
+      }
+
+      // Get inherited vars for this file from Slither data
+      const inheritedVarsForFile = this._getInheritedVarsForFile(document.fileName);
+
+      const decorations = this._buildDecorations(parsed, document, inheritedVarsForFile);
+      this._applyDecorations(editor, decorations);
+    } catch (error) {
+      console.error("Error decorating state variables:", error);
+    }
+  }
+
+  _getInheritedVarsForFile(filePath) {
+    for (const [path, contractMap] of this._inheritedVarsMap.entries()) {
+      if (filePath.endsWith(path) || path.endsWith(filePath.split("/").slice(-2).join("/"))) {
+        return contractMap;
+      }
+    }
+    return new Map();
+  }
+
+  _buildDecorations(parsed, document, inheritedVarsForFile) {
+    const decorations = [];
+
+    for (const contract of parsed.contracts) {
+      // Get inherited vars for this contract from Slither
+      const slitherInheritedVars = inheritedVarsForFile.get(contract.name) || [];
+      const inheritedVarNames = new Set(slitherInheritedVars.map((v) => v.name));
+
+      // Process state variables declared in this contract
+      for (const svar of contract.stateVariables) {
+        // Decoration for the declaration
+        const declRange = new vscode.Range(
+          new vscode.Position(svar.declarationLocation.line - 1, svar.declarationLocation.startColumn),
+          new vscode.Position(svar.declarationLocation.line - 1, svar.declarationLocation.endColumn)
+        );
+
+        const styleKey = this._getStyleKeyForVariable(svar, false);
+        const hoverMessage = this._buildHoverMessage(svar, document, svar.declarationLocation.line);
+
+        decorations.push({
+          range: declRange,
+          hoverMessage,
+          styleKey,
+        });
+
+        // Decorations for usages
+        for (const usage of svar.usages) {
+          const usageRange = new vscode.Range(
+            new vscode.Position(usage.line - 1, usage.startColumn),
+            new vscode.Position(usage.line - 1, usage.endColumn)
+          );
+
+          const usageStyleKey = usage.isShadowed
+            ? "stateVarShadowed"
+            : this._getStyleKeyForVariable(svar, false);
+
+          const usageHoverMessage = this._buildHoverMessage(
+            svar,
+            document,
+            svar.declarationLocation.line,
+            usage.isShadowed
+          );
+
+          decorations.push({
+            range: usageRange,
+            hoverMessage: usageHoverMessage,
+            styleKey: usageStyleKey,
+          });
+        }
+      }
+
+      // Process inherited state variable usages from solidity-workspace
+      for (const inheritedUsage of contract.inheritedUsages) {
+        const usageRange = new vscode.Range(
+          new vscode.Position(inheritedUsage.line - 1, inheritedUsage.startColumn),
+          new vscode.Position(inheritedUsage.line - 1, inheritedUsage.endColumn)
+        );
+
+        const styleKey = inheritedUsage.isShadowed ? "stateVarShadowed" : "stateVarInherited";
+
+        const hoverMessage = this._buildInheritedHoverMessage(inheritedUsage);
+
+        decorations.push({
+          range: usageRange,
+          hoverMessage,
+          styleKey,
+        });
+      }
+
+      // Also decorate inherited vars from Slither data by scanning identifiers
+      if (slitherInheritedVars.length > 0) {
+        this._decorateInheritedVarsFromSlither(
+          document,
+          contract.name,
+          slitherInheritedVars,
+          contract.stateVariables.map((s) => s.name),
+          decorations
+        );
+      }
+    }
+
+    return decorations;
+  }
+
+  _decorateInheritedVarsFromSlither(document, contractName, inheritedVars, localStateVarNames, decorations) {
+    const text = document.getText();
+    const localVarsSet = new Set(localStateVarNames);
+
+    for (const inheritedVar of inheritedVars) {
+      // Skip if there's a local var with the same name (it shadows the inherited one)
+      if (localVarsSet.has(inheritedVar.name)) {
+        continue;
+      }
+
+      // Find all occurrences of this variable name in the document
+      const regex = new RegExp(`\\b${inheritedVar.name}\\b`, "g");
+      let match;
+
+      while ((match = regex.exec(text)) !== null) {
+        const startPos = document.positionAt(match.index);
+        const endPos = document.positionAt(match.index + inheritedVar.name.length);
+
+        // Skip if this position is already decorated
+        const alreadyDecorated = decorations.some(
+          (d) =>
+            d.range.start.line === startPos.line &&
+            d.range.start.character === startPos.character
+        );
+
+        if (alreadyDecorated) {
+          continue;
+        }
+
+        const range = new vscode.Range(startPos, endPos);
+        const hoverMessage = this._buildSlitherInheritedHoverMessage(inheritedVar);
+
+        // Use appropriate style based on variable type
+        let styleKey = "stateVarInherited";
+        if (inheritedVar.isConstant) {
+          styleKey = "stateVarConstant";
+        } else if (inheritedVar.isImmutable) {
+          styleKey = "stateVarImmutable";
+        }
+
+        decorations.push({
+          range,
+          hoverMessage,
+          styleKey,
+        });
+      }
+    }
+  }
+
+  _getStyleKeyForVariable(svar, isInherited) {
+    if (svar.isConstant) {
+      return "stateVarConstant";
+    }
+    if (svar.isImmutable) {
+      return "stateVarImmutable";
+    }
+    if (isInherited) {
+      return "stateVarInherited";
+    }
+    return "stateVar";
+  }
+
+  _buildHoverMessage(svar, document, declarationLine, isShadowed = false) {
+    const md = new vscode.MarkdownString();
+    md.isTrusted = true;
+
+    let prefix = "";
+    if (isShadowed) {
+      prefix = "**SHADOWED** ";
+    } else if (svar.isConstant) {
+      prefix = "**CONST** ";
+    } else if (svar.isImmutable) {
+      prefix = "**IMMUTABLE** ";
+    }
+
+    const declUri = document.uri.toString();
+    const declLink = `[Declaration: #${declarationLine}](${declUri}#${declarationLine})`;
+
+    md.appendMarkdown(
+      `${prefix}(*${svar.type}*) **StateVar** *${svar.contract}*.**${svar.name}** (${declLink})`
+    );
+
+    return md;
+  }
+
+  _buildInheritedHoverMessage(usage) {
+    const md = new vscode.MarkdownString();
+    md.isTrusted = true;
+
+    const prefix = usage.isShadowed ? "**SHADOWED** " : "**INHERITED** ";
+
+    md.appendMarkdown(`${prefix}**StateVar** *${usage.sourceContract}*.**${usage.name}**`);
+
+    return md;
+  }
+
+  _buildSlitherInheritedHoverMessage(varInfo) {
+    const md = new vscode.MarkdownString();
+    md.isTrusted = true;
+
+    let prefix = "**INHERITED** ";
+    if (varInfo.isConstant) {
+      prefix = "**INHERITED CONST** ";
+    } else if (varInfo.isImmutable) {
+      prefix = "**INHERITED IMMUTABLE** ";
+    }
+
+    md.appendMarkdown(
+      `${prefix}(*${varInfo.type}*) **StateVar** *${varInfo.inheritedFrom}*.**${varInfo.name}**`
+    );
+
+    return md;
+  }
+
+  _applyDecorations(editor, decorations) {
+    if (!this._styles) {
+      return;
+    }
+
+    // Group decorations by style
+    const groupedDecorations = {
+      stateVar: [],
+      stateVarConstant: [],
+      stateVarImmutable: [],
+      stateVarInherited: [],
+      stateVarShadowed: [],
+    };
+
+    for (const deco of decorations) {
+      groupedDecorations[deco.styleKey].push({
+        range: deco.range,
+        hoverMessage: deco.hoverMessage,
+      });
+    }
+
+    // Apply each group
+    for (const [styleKey, options] of Object.entries(groupedDecorations)) {
+      const style = this._styles[styleKey];
+      editor.setDecorations(style, options);
+    }
+  }
+
+  clearDecorations(editor) {
+    if (!this._styles) {
+      return;
+    }
+
+    for (const style of Object.values(this._styles)) {
+      editor.setDecorations(style, []);
+    }
+  }
+
+  dispose() {
+    if (this._debounceTimer) {
+      clearTimeout(this._debounceTimer);
+    }
+
+    this._parser.dispose();
+
+    for (const disposable of this._disposables) {
+      disposable.dispose();
+    }
+  }
+}
 
 function activate(context) {
   jumpHighlightDecoration = vscode.window.createTextEditorDecorationType({
@@ -74,8 +719,25 @@ function activate(context) {
     vscode.commands.registerCommand("trackidity.clearAllReviewed", () => workflowsProvider.clearAllReviewed())
   );
 
+  // Initialize state variable highlighting
+  const stateVarDecorationManager = new StateVarDecorationManager(context);
+  stateVarDecorationManager.init();
+  context.subscriptions.push({ dispose: () => stateVarDecorationManager.dispose() });
+
+  // Wire up analysis events for inherited variable highlighting
+  context.subscriptions.push(
+    workflowsProvider.onAnalysisChanged((analysis) => {
+      stateVarDecorationManager.setAnalysisData(analysis);
+    })
+  );
+
   // Initial load
   workflowsProvider.load();
+
+  // If there's already analysis data, pass it to the decoration manager
+  if (workflowsProvider.analysis) {
+    stateVarDecorationManager.setAnalysisData(workflowsProvider.analysis);
+  }
 }
 
 function deactivate() {}
@@ -129,11 +791,20 @@ class WorkflowsProvider {
     this._onDidChangeTreeData = new vscode.EventEmitter();
     this.onDidChangeTreeData = this._onDidChangeTreeData.event;
 
+    // Event emitter for when analysis data changes (used by StateVarDecorationManager)
+    this._onAnalysisChanged = new vscode.EventEmitter();
+    this.onAnalysisChanged = this._onAnalysisChanged.event;
+
     this._loading = false;
     this._lastError = null;
     this._analysis = null;
     this._workspaceRoot = null;
     this._files = [];
+  }
+
+  // Getter for current analysis data
+  get analysis() {
+    return this._analysis;
   }
 
   getTreeItem(element) {
@@ -291,6 +962,9 @@ class WorkflowsProvider {
         this._variablesProvider.setAnalysis(raw, workspace.uri.fsPath);
       }
 
+      // Notify listeners that analysis has changed (for state var highlighting)
+      this._onAnalysisChanged.fire(raw);
+
       this._loading = false;
       this._lastError = null;
       this._onDidChangeTreeData.fire();
@@ -384,6 +1058,9 @@ class WorkflowsProvider {
       if (this._variablesProvider) {
         this._variablesProvider.setAnalysis(raw, workspace.uri.fsPath);
       }
+
+      // Notify listeners that analysis has changed (for state var highlighting)
+      this._onAnalysisChanged.fire(raw);
 
       this._loading = false;
       this._lastError = null;
