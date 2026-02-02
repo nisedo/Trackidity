@@ -1206,13 +1206,16 @@ class WorkflowsProvider {
         vscode.TreeItemCollapsibleState.Expanded
       );
       item.contextValue = "trackidity.file";
-      item.iconPath = new vscode.ThemeIcon("file-code");
       item.tooltip = element.fileAbs;
       // Show reviewed progress
       const reviewed = this._context.workspaceState.get(REVIEWED_ENTRYPOINTS_KEY, []);
       const total = element.entrypoints?.length || 0;
       const reviewedCount = (element.entrypoints || []).filter((ep) => reviewed.includes(ep.flowId)).length;
       item.description = `${reviewedCount}/${total} reviewed`;
+      // Use checkmark icon when all entrypoints are reviewed
+      item.iconPath = total > 0 && reviewedCount === total
+        ? new vscode.ThemeIcon("pass", new vscode.ThemeColor("testing.iconPassed"))
+        : new vscode.ThemeIcon("file-code");
       return item;
     }
 
