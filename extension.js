@@ -1748,7 +1748,7 @@ function entrypointIcon(label) {
   if (s.startsWith("fallback")) {
     return new vscode.ThemeIcon("symbol-misc");
   }
-  return new vscode.ThemeIcon("debug-start");
+  return new vscode.ThemeIcon("symbol-method");
 }
 
 function isSupportedProjectRoot(dir) {
