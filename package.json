@@ -2,7 +2,7 @@
   "name": "trackidity",
   "displayName": "Trackidity",
   "description": "Entry points explorer for Solidity projects using Slither",
-  "version": "0.0.29",
+  "version": "0.0.30",
   "publisher": "nisedo",
   "license": "MIT",
   "repository": {

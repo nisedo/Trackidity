@@ -1040,11 +1040,15 @@ function activate(context) {
   // Unfold all (expand) - expand all file nodes
   context.subscriptions.push(
     vscode.commands.registerCommand("trackidity.unfoldAll", async () => {
-      // Reveal each file node to expand them
       const files = workflowsProvider._files || [];
+      if (files.length === 0) {
+        return;
+      }
+      // Reveal each file node with expand: 2 (expands element and children)
+      // select: false to avoid changing selection, focus: false to keep focus
       for (const file of files) {
         try {
-          await workflowsTreeView.reveal(file, { expand: true });
+          await workflowsTreeView.reveal(file, { expand: 2, select: false, focus: false });
         } catch (e) {
           // Ignore errors for individual reveals
         }
