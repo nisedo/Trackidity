@@ -2,7 +2,7 @@
   "name": "trackidity",
   "displayName": "Trackidity",
   "description": "Entry points explorer for Solidity projects using Slither",
-  "version": "0.0.30",
+  "version": "0.0.31",
   "publisher": "nisedo",
   "license": "MIT",
   "repository": {
@@ -120,12 +120,6 @@
         "title": "Collapse All",
         "category": "Trackidity",
         "icon": "$(collapse-all)"
-      },
-      {
-        "command": "trackidity.unfoldAll",
-        "title": "Expand All",
-        "category": "Trackidity",
-        "icon": "$(expand-all)"
       }
     ],
     "menus": {
@@ -133,12 +127,7 @@
         {
           "command": "trackidity.foldAll",
           "when": "view == trackidity.workflows",
-          "group": "navigation@1"
-        },
-        {
-          "command": "trackidity.unfoldAll",
-          "when": "view == trackidity.workflows",
-          "group": "navigation@2"
+          "group": "navigation"
         }
       ],
       "view/item/context": [

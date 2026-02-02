@@ -1017,10 +1017,11 @@ function activate(context) {
   // Link providers for shared refresh
   workflowsProvider._variablesProvider = variablesProvider;
 
-  const workflowsTreeView = vscode.window.createTreeView(WORKFLOWS_VIEW_ID, {
-    treeDataProvider: workflowsProvider,
-  });
-  context.subscriptions.push(workflowsTreeView);
+  context.subscriptions.push(
+    vscode.window.createTreeView(WORKFLOWS_VIEW_ID, {
+      treeDataProvider: workflowsProvider,
+    })
+  );
 
   context.subscriptions.push(
     vscode.window.createTreeView(VARIABLES_VIEW_ID, {
@@ -1034,25 +1035,6 @@ function activate(context) {
     vscode.commands.registerCommand("trackidity.foldAll", () => {
       // Use VS Code's built-in collapse command for tree views
       vscode.commands.executeCommand("list.collapseAll");
-    })
-  );
-
-  // Unfold all (expand) - expand all file nodes
-  context.subscriptions.push(
-    vscode.commands.registerCommand("trackidity.unfoldAll", async () => {
-      const files = workflowsProvider._files || [];
-      if (files.length === 0) {
-        return;
-      }
-      // Reveal each file node with expand: 2 (expands element and children)
-      // select: false to avoid changing selection, focus: false to keep focus
-      for (const file of files) {
-        try {
-          await workflowsTreeView.reveal(file, { expand: 2, select: false, focus: false });
-        } catch (e) {
-          // Ignore errors for individual reveals
-        }
-      }
     })
   );
 
